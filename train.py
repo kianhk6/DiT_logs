@@ -192,18 +192,37 @@ def main(args):
     start_time = time()
 
     logger.info(f"Training for {args.epochs} epochs...")
+
+    # Define the flag and its tracking variable
+    sampling_flag = False
+    last_sampled_epoch = -1
+
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
+
+            # Set the flag for sampling moderation every 10 epochs
+        if epoch % 10 == 0 and epoch != last_sampled_epoch:
+            sampling_flag = True
+            last_sampled_epoch = epoch  # Ensure it only activates once per 10 epochs
+
         for x, y in loader:
             x = x.to(device)
             y = y.to(device)
             with torch.no_grad():
                 # Map input images to latent space + normalize latents:
                 x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+        
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             model_kwargs = dict(y=y)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+
+            if sampling_flag:
+                logger.info(f"Sampling moderation active for epoch {epoch}.")
+                loss_dict = diffusion.training_losses(model, x, t, True, epoch, device, model_kwargs)
+                sampling_flag = False  # Reset the flag after first use in the 
+            else:
+                loss_dict = diffusion.training_losses(model, x, t, False, epoch, device, model_kwargs)
+
             loss = loss_dict["loss"].mean()
             opt.zero_grad()
             loss.backward()
@@ -259,7 +278,7 @@ if __name__ == "__main__":
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=1400)
-    parser.add_argument("--global-batch-size", type=int, default=256)
+    parser.add_argument("--global-batch-size", type=int, default=3)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
     parser.add_argument("--num-workers", type=int, default=4)

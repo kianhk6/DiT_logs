@@ -9,6 +9,9 @@ import math
 import numpy as np
 import torch as th
 import enum
+from diffusers.models import AutoencoderKL
+import os
+from torchvision.utils import save_image
 
 from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
 
@@ -212,7 +215,7 @@ class GaussianDiffusion:
         log_variance = _extract_into_tensor(self.log_one_minus_alphas_cumprod, t, x_start.shape)
         return mean, variance, log_variance
 
-    def q_sample(self, x_start, t, noise=None):
+    def q_sample(self, x_start, t, sampling_flag=None, epoch=None, device=None, noise=None):
         """
         Diffuse the data for a given number of diffusion steps.
         In other words, sample from q(x_t | x_0).
@@ -224,10 +227,30 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         assert noise.shape == x_start.shape
-        return (
+
+        # Diffuse the input data
+        x_t = (
             _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
             + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
+        vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
+
+        
+        # Handle the sampling logic
+        if sampling_flag is True and vae is not None and epoch is not None:
+            sample_dir = f"./sample_{epoch}"
+            os.makedirs(sample_dir, exist_ok=True)  # Ensure the directory exists
+
+            # Decode the latent points to images
+            decoded_images = vae.decode(x_t / 0.18215).sample
+
+            # Save images as PNG
+            for i, image in enumerate(decoded_images):
+                save_path = os.path.join(sample_dir, f"sample_{i:06d}.png")
+                save_image(image, save_path)
+                print(f"Saved sample to {save_path}")
+
+        return x_t
 
     def q_posterior_mean_variance(self, x_start, x_t, t):
         """
@@ -712,7 +735,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
+    def training_losses(self, model, x_start, t, sampling_flag, epoch, device, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -728,7 +751,7 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
+        x_t = self.q_sample(x_start, t, sampling_flag=sampling_flag, epoch=epoch, device=device, noise=noise)
 
         terms = {}
 
